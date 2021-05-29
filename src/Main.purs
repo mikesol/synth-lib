@@ -28,20 +28,12 @@ import WAGS.Control.Qualified as WAGS
 import WAGS.Control.Types (Frame, Frame0, Scene)
 import WAGS.Graph.AudioUnit (TBandpass, TDelay, TGain, THighpass, TMicrophone, TSawtoothOsc(..), TSpeaker)
 import WAGS.Graph.Optionals (bandpass_, delay_, gain_, highpass_, sawtoothOsc_)
-import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter, AudioParameter_(..))
+import WAGS.Graph.Parameter (AudioParameter, AudioParameterTransition(..), AudioParameter_(..), param)
 import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, getMicrophoneAndCamera, makeUnitCache)
 import WAGS.Patch (patch)
 import WAGS.Run (SceneI, run)
 
 vol = 1.4 :: Number
-
-audioP :: Number -> Number -> AudioParameter
-audioP param' timeOffset = AudioParameter { param, timeOffset, transition: LinearRamp }
-  where
-  param = Just param'
-
-ap' :: Number -> AudioParameter
-ap' = flip audioP 0.06
 
 type SceneType
   = { speaker :: TSpeaker /\ { mix :: Unit }
@@ -53,16 +45,30 @@ type SceneType
 type FrameTp p i o a
   = Frame (SceneI Unit Unit) FFIAudio (Effect Unit) p i o a
 
+ff' :: forall a. Number -> AudioParameter_ a -> AudioParameter_ a
+ff' toff (AudioParameter i@({ timeOffset })) = AudioParameter (i { timeOffset = timeOffset + toff })
+
+ff :: forall a. AudioParameter_ a -> AudioParameter_ a
+ff = ff' 0.06
+
+asdr :: Number -> AudioParameter
+asdr t
+  | t < 0.0 = param 0.0
+  | otherwise = param 0.0
+
 doChanges :: forall proof. FrameTp proof SceneType SceneType Unit
 doChanges = WAGS.do
-  ivoid $ change {}
+  { time } <- env
+  ivoid $ change {
+    swt: gain_ (ff (asdr time))
+  }
 
 createFrame :: FrameTp Frame0 {} SceneType Unit
 createFrame =
   patch
     :*> change
         { mix: gain_ 1.0
-        , swt: gain_ 0.05
+        , swt: gain_ 0.00
         , osc: sawtoothOsc_ 440.0
         }
     :*> doChanges
