@@ -1,4 +1,4 @@
-module EPWF (makePiecewise) where
+module EPWF (makePiecewise, ASDR, TimeHeadroom) where
 
 import Prelude
 import Control.Comonad.Cofree (Cofree, (:<))
@@ -23,10 +23,13 @@ calcSlope x0 y0 x1 y1 x =
     in
       m * x + b
 
-makePiecewise :: NonEmpty List (Number /\ Number) -> TimeHeadroom -> Cofree ((->) TimeHeadroom) AudioParameter
+type ASDR
+  = TimeHeadroom -> Cofree ((->) TimeHeadroom) AudioParameter
+
+makePiecewise :: NonEmpty List (Number /\ Number) -> ASDR
 makePiecewise = makePiecewise' true
 
-makePiecewise' :: Boolean -> NonEmpty List (Number /\ Number) -> TimeHeadroom -> Cofree ((->) TimeHeadroom) AudioParameter
+makePiecewise' :: Boolean -> NonEmpty List (Number /\ Number) -> ASDR
 makePiecewise' forceSet (a /\ b :| Nil) _ =
   AudioParameter
     { param: Just b

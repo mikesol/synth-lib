@@ -1,14 +1,17 @@
 module Main where
 
 import Prelude
-
 import Control.Apply.Indexed ((:*>))
-import Control.Comonad.Cofree (Cofree, mkCofree)
+import Control.Comonad.Cofree (Cofree, head, mkCofree, tail)
 import Data.Foldable (for_)
-import Data.Functor.Indexed (ivoid)
+import Data.Int (toNumber)
+import Data.List (List(..), (:))
+import Data.List as L
 import Data.Maybe (Maybe(..))
+import Data.NonEmpty ((:|))
 import Data.Nullable (toNullable)
-import Data.Tuple.Nested (type (/\))
+import Data.Tuple.Nested ((/\), type (/\))
+import EPWF (ASDR, makePiecewise)
 import Effect (Effect)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
@@ -20,15 +23,13 @@ import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
-import Math (cos, pi, sin)
 import WAGS.Change (change)
-import WAGS.Control.Functions (env)
+import WAGS.Control.Functions (env, proof, withProof)
 import WAGS.Control.Functions.Validated (loop, (@|>))
 import WAGS.Control.Qualified as WAGS
 import WAGS.Control.Types (Frame, Frame0, Scene)
-import WAGS.Graph.AudioUnit (TBandpass, TDelay, TGain, THighpass, TMicrophone, TSawtoothOsc(..), TSpeaker)
-import WAGS.Graph.Optionals (bandpass_, delay_, gain_, highpass_, sawtoothOsc_)
-import WAGS.Graph.Parameter (AudioParameter, AudioParameterTransition(..), AudioParameter_(..), param)
+import WAGS.Graph.AudioUnit (TGain, TSawtoothOsc, TSpeaker)
+import WAGS.Graph.Optionals (gain_, sawtoothOsc_)
 import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, getMicrophoneAndCamera, makeUnitCache)
 import WAGS.Patch (patch)
 import WAGS.Run (SceneI, run)
@@ -37,46 +38,58 @@ vol = 1.4 :: Number
 
 type SceneType
   = { speaker :: TSpeaker /\ { mix :: Unit }
-    , mix :: TGain /\ { swt :: Unit }
-    , swt :: TGain /\ { osc :: Unit }
-    , osc :: TSawtoothOsc /\ {}
+    , mix :: TGain /\ { swt0 :: Unit }
+    , swt0 :: TGain /\ { osc0 :: Unit }
+    , osc0 :: TSawtoothOsc /\ {}
     }
 
 type FrameTp p i o a
   = Frame (SceneI Unit Unit) FFIAudio (Effect Unit) p i o a
 
-ff' :: forall a. Number -> AudioParameter_ a -> AudioParameter_ a
-ff' toff (AudioParameter i@({ timeOffset })) = AudioParameter (i { timeOffset = timeOffset + toff })
+-- set up to the first 200ms
+-- set everything afterwards 200ms out 
+deltaIter :: List Number
+deltaIter = (mul 0.02 <<< toNumber) <$> L.range 0 19
 
-ff :: forall a. AudioParameter_ a -> AudioParameter_ a
-ff = ff' 0.06
+changeIter :: forall proof. List Number -> Acc -> FrameTp proof SceneType SceneType Acc
+changeIter Nil acc = proof `WAGS.bind` flip withProof acc
 
-asdr :: Number -> AudioParameter
-asdr t
-  | t < 0.0 = param 0.0
-  | otherwise = param 0.0
+changeIter (a : b) acc = doChanges a acc `WAGS.bind` changeIter b
 
-doChanges :: forall proof. FrameTp proof SceneType SceneType Unit
-doChanges = WAGS.do
-  { time } <- env
-  ivoid $ change {
-    swt: gain_ (ff (asdr time))
+doChanges :: forall proof. Number -> Acc -> FrameTp proof SceneType SceneType Acc
+doChanges toff acc = WAGS.do
+  { time, headroom } <- env
+  let
+    f = acc.asdr0 { time: time + toff, headroom: toNumber headroom / 1000.0 }
+
+    v = head f
+
+    t = tail f
+  change { swt0: gain_ v } $> { asdr0: t }
+
+type Acc
+  = { asdr0 :: ASDR
+    }
+
+iAcc :: Acc
+iAcc =
+  { asdr0: makePiecewise ((0.0 /\ 0.0) :| (0.1 /\ 1.0) : (0.3 /\ 0.2) : (1.0 /\ 0.0) : Nil)
   }
 
-createFrame :: FrameTp Frame0 {} SceneType Unit
+createFrame :: FrameTp Frame0 {} SceneType Acc
 createFrame =
   patch
     :*> change
         { mix: gain_ 1.0
-        , swt: gain_ 0.00
-        , osc: sawtoothOsc_ 440.0
+        , swt0: gain_ 0.00
+        , osc0: sawtoothOsc_ 440.0
         }
-    :*> doChanges
+    :*> changeIter deltaIter iAcc
 
 piece :: Scene (SceneI Unit Unit) FFIAudio (Effect Unit) Frame0
 piece =
   createFrame
-    @|> loop (const doChanges)
+    @|> loop (doChanges 0.2)
 
 easingAlgorithm :: Cofree ((->) Int) Int
 easingAlgorithm =
