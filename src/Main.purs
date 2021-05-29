@@ -3,16 +3,12 @@ module Main where
 import Prelude
 
 import Control.Apply.Indexed ((:*>))
-import Control.Comonad.Cofree (Cofree, head, mkCofree, tail)
+import Control.Comonad.Cofree (Cofree, mkCofree)
 import Data.Foldable (for_)
-import Data.Int (toNumber)
 import Data.List (List(..), (:))
-import Data.List as L
 import Data.Maybe (Maybe(..))
-import Data.NonEmpty ((:|))
 import Data.Nullable (toNullable)
 import Data.Tuple.Nested ((/\), type (/\))
-import EPWF (ASDR, makePiecewise)
 import Effect (Effect)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
@@ -25,7 +21,7 @@ import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
 import WAGS.Change (change)
-import WAGS.Control.Functions (env, proof, withProof)
+import WAGS.Control.Functions (proof, withProof)
 import WAGS.Control.Functions.Validated (loop, (@|>))
 import WAGS.Control.Qualified as WAGS
 import WAGS.Control.Types (Frame, Frame0, Scene)
@@ -48,8 +44,6 @@ type SceneType
 type FrameTp p i o a
   = Frame (SceneI Unit Unit) FFIAudio (Effect Unit) p i o a
 
--- set up to the first 200ms
--- set everything afterwards 200ms out 
 deltaIter :: List (Number /\ Number)
 deltaIter = (1.0 /\ 0.0) : (1.08 /\ 1.0) : (1.17 /\ 0.3) : (1.63 /\ 0.1) : (1.83 /\ 0.0) : Nil
 
