@@ -1,6 +1,7 @@
 module Main where
 
 import Prelude
+
 import Control.Apply.Indexed ((:*>))
 import Control.Comonad.Cofree (Cofree, head, mkCofree, tail)
 import Data.Foldable (for_)
@@ -30,6 +31,7 @@ import WAGS.Control.Qualified as WAGS
 import WAGS.Control.Types (Frame, Frame0, Scene)
 import WAGS.Graph.AudioUnit (TGain, TSawtoothOsc, TSpeaker)
 import WAGS.Graph.Optionals (gain_, sawtoothOsc_)
+import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter_(..))
 import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, getMicrophoneAndCamera, makeUnitCache)
 import WAGS.Patch (patch)
 import WAGS.Run (SceneI, run)
@@ -48,55 +50,41 @@ type FrameTp p i o a
 
 -- set up to the first 200ms
 -- set everything afterwards 200ms out 
-deltaIter :: List Number
-deltaIter = (mul 0.02 <<< toNumber) <$> L.range 0 19
+deltaIter :: List (Number /\ Number)
+deltaIter = (1.0 /\ 0.0) : (1.08 /\ 1.0) : (1.17 /\ 0.3) : (1.63 /\ 0.1) : (1.83 /\ 0.0) : Nil
 
-changeIter :: forall proof. List Number -> Acc -> FrameTp proof SceneType SceneType Acc
-changeIter Nil acc = proof `WAGS.bind` flip withProof acc
+changeIter :: forall proof. Boolean -> List (Number /\ Number) -> FrameTp proof SceneType SceneType Unit
+changeIter _ Nil = proof `WAGS.bind` flip withProof unit
 
-changeIter (a : b) acc = doChanges a acc `WAGS.bind` changeIter b
+changeIter forceSet (a : b) = WAGS.do
+  doChanges forceSet a
+  changeIter false b
 
-doChanges :: forall proof. Number -> Acc -> FrameTp proof SceneType SceneType Acc
-doChanges toff acc = WAGS.do
-  { time, headroom } <- env
-  let
-    f = acc.asdr0 { time: time + toff, headroom: toNumber headroom / 1000.0 }
+doChanges :: forall proof. Boolean ->  Number /\ Number -> FrameTp proof SceneType SceneType Unit
+doChanges forceSet (a /\ b)  = WAGS.do
+  change { swt0: gain_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
 
-    v = head f
-
-    t = tail f
-  change { swt0: gain_ v } $> { asdr0: t }
-
-type Acc
-  = { asdr0 :: ASDR
-    }
-
-iAcc :: Acc
-iAcc =
-  { asdr0: makePiecewise ((0.0 /\ 0.0) :| (0.1 /\ 1.0) : (0.3 /\ 0.2) : (1.0 /\ 0.0) : Nil)
-  }
-
-createFrame :: FrameTp Frame0 {} SceneType Acc
+createFrame :: FrameTp Frame0 {} SceneType Unit
 createFrame =
   patch
     :*> change
-        { mix: gain_ 1.0
-        , swt0: gain_ 0.00
+        { mix: gain_ 0.2
+        , swt0: gain_ 0.0
         , osc0: sawtoothOsc_ 440.0
         }
-    :*> changeIter deltaIter iAcc
+    :*> changeIter true deltaIter
 
 piece :: Scene (SceneI Unit Unit) FFIAudio (Effect Unit) Frame0
 piece =
   createFrame
-    @|> loop (doChanges 0.2)
+    @|> loop (const $ proof `WAGS.bind` flip withProof unit)
 
 easingAlgorithm :: Cofree ((->) Int) Int
 easingAlgorithm =
   let
-    fOf initialTime = mkCofree initialTime \adj -> fOf $ max 20 (initialTime - adj)
+    fOf initialTime = mkCofree initialTime \adj -> fOf $ max 15 (initialTime - adj)
   in
-    fOf 20
+    fOf 15
 
 main :: Effect Unit
 main =
