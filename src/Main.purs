@@ -21,13 +21,14 @@ import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
+import Math (pow)
 import WAGS.Change (change)
 import WAGS.Control.Functions (proof, withProof)
 import WAGS.Control.Functions.Validated (loop, (@|>))
 import WAGS.Control.Qualified as WAGS
 import WAGS.Control.Types (Frame, Frame0, Scene)
-import WAGS.Graph.AudioUnit (Bandpass, TBandpass, TGain, THighpass(..), TSawtoothOsc, TSpeaker)
-import WAGS.Graph.Optionals (GetSetAP, bandpass_, gain_, highpass_, sawtoothOsc_)
+import WAGS.Graph.AudioUnit (Bandpass, TBandpass, TDelay(..), TGain, THighpass(..), TSawtoothOsc, TSpeaker)
+import WAGS.Graph.Optionals (GetSetAP, bandpass_, delay_, gain_, highpass_, sawtoothOsc_)
 import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter_(..))
 import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, makeUnitCache)
 import WAGS.Patch (patch)
@@ -37,9 +38,10 @@ vol = 1.4 :: Number
 
 type SceneType
   = { speaker :: TSpeaker /\ { mix :: Unit }
-    , mix :: TGain /\ { hpf0 :: Unit }
-    , hpf0 :: THighpass /\ { swt0 :: Unit }
-    , swt0 :: TGain /\ { bpf0 :: Unit, bpf1 :: Unit, bpf2 :: Unit }
+    , mix :: TGain /\ { swt0 :: Unit }
+    , del0 :: TDelay /\ { swt0 :: Unit }
+    , att0 :: TGain /\ { del0 :: Unit }
+    , swt0 :: TGain /\ { bpf0 :: Unit, bpf1 :: Unit, bpf2 :: Unit, att0 :: Unit }
     , bpf0 :: TBandpass /\ { osc0 :: Unit }
     , bpf1 :: TBandpass /\ { osc0 :: Unit }
     , bpf2 :: TBandpass /\ { osc0 :: Unit }
@@ -49,14 +51,20 @@ type SceneType
 type FrameTp p i o a
   = Frame (SceneI Unit Unit) FFIAudio (Effect Unit) p i o a
 
+stT = 0.1 :: Number
+endT = 8.1 :: Number
+
 gtime :: Number -> Number
 gtime n
-  | n < 0.0 = 1.0
-  | n <= 1.0 = calcSlope 0.0 1.0 1.0 9.0 n
-  | otherwise = 9.0
+  | n < 0.0 = stT
+  | n <= 1.0 = calcSlope 0.0 stT 1.0 endT n
+  | otherwise = endT
 
 deltaGain :: List (Number /\ Number)
 deltaGain = (gtime 0.0 /\ 0.0) : (gtime 0.5 /\ 1.0) : (gtime 1.0 /\ 0.0) : Nil
+
+deltaDel :: List (Number /\ Number)
+deltaDel = (gtime 0.0 /\ 0.1) : (gtime 0.1 /\ 0.03) : (gtime 0.2 /\ 0.1) : (gtime 0.3 /\ 0.2) : (gtime 0.4 /\ 0.1) : (gtime 0.5 /\ 0.03) : (gtime 0.6 /\ 0.1) : (gtime 0.8 /\ 0.4) : (gtime 1.0 /\ 0.03) : Nil
 
 deltaBPF0Freq :: List (Number /\ Number)
 deltaBPF0Freq = (gtime 0.0 /\ fund * 3.0) : (gtime 0.25 /\ fund * 2.0) : (gtime 1.0 /\ fund * 1.0) : Nil
@@ -99,16 +107,22 @@ changeBPF2Freq :: forall proof. Boolean -> Number /\ Number -> FrameTp proof Sce
 changeBPF2Freq forceSet (a /\ b) = WAGS.do
   change { bpf2: cbpf a b forceSet } $> unit
 
-fund = 220.0 :: Number
+changeDel :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeDel forceSet (a /\ b) = WAGS.do
+  change { del0: delay_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
+
+fund :: Number
+fund = let md = -12.0 in 440.0 * (2.0 `pow` (md / 12.0))
 
 createFrame :: FrameTp Frame0 {} SceneType Unit
 createFrame =
   patch
     :*> change
-        { mix: gain_ 0.2
+        { mix: gain_ 1.0
         , swt0: gain_ 0.0
+        , att0: gain_ 0.5
+        , del0: delay_ 0.1
         , osc0: sawtoothOsc_ fund
-        , hpf0: highpass_ { freq: 1200.0, q: 30.0 }
         , bpf0: bandpass_ { freq: fund * 3.0, q: myQ }
         , bpf1: bandpass_ { freq: fund * 4.0, q: myQ }
         , bpf2: bandpass_ { freq: fund * 8.0, q: myQ }
@@ -117,6 +131,7 @@ createFrame =
     :*> changeIter changeBPF0Freq true deltaBPF0Freq
     :*> changeIter changeBPF1Freq true deltaBPF1Freq
     :*> changeIter changeBPF2Freq true deltaBPF2Freq
+    :*> changeIter changeDel true deltaDel
 
 piece :: Scene (SceneI Unit Unit) FFIAudio (Effect Unit) Frame0
 piece =
@@ -171,9 +186,7 @@ render _ =
             [ HH.div [ classes [ "flex-grow" ] ] []
             , HH.div_
                 [ HH.h1 [ classes [ "text-center", "text-3xl", "font-bold" ] ]
-                    [ HH.text "Fun with feedback" ]
-                , HH.p [ classes [ "text-center" ] ]
-                    [ HH.text "Use headphones!" ]
+                    [ HH.text "Beautiful alien" ]
                 , HH.button
                     [ classes [ "text-2xl", "m-5", "bg-indigo-500", "p-3", "rounded-lg", "text-white", "hover:bg-indigo-400" ], HE.onClick \_ -> StartAudio ]
                     [ HH.text "Start audio" ]
