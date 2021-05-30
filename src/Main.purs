@@ -1,7 +1,6 @@
 module Main where
 
 import Prelude
-
 import Control.Apply.Indexed ((:*>))
 import Control.Comonad.Cofree (Cofree, mkCofree)
 import Data.Foldable (for_)
@@ -25,9 +24,9 @@ import WAGS.Control.Functions (proof, withProof)
 import WAGS.Control.Functions.Validated (loop, (@|>))
 import WAGS.Control.Qualified as WAGS
 import WAGS.Control.Types (Frame, Frame0, Scene)
-import WAGS.Graph.AudioUnit (TGain, TSawtoothOsc, TSpeaker)
-import WAGS.Graph.Optionals (gain_, sawtoothOsc_)
-import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter_(..))
+import WAGS.Graph.AudioUnit (Bandpass(..), TBandpass, TGain, TSawtoothOsc, TSpeaker)
+import WAGS.Graph.Optionals (GetSetAP, bandpass_, gain_, sawtoothOsc_)
+import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter, AudioParameter_(..))
 import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, getMicrophoneAndCamera, makeUnitCache)
 import WAGS.Patch (patch)
 import WAGS.Run (SceneI, run)
@@ -37,26 +36,64 @@ vol = 1.4 :: Number
 type SceneType
   = { speaker :: TSpeaker /\ { mix :: Unit }
     , mix :: TGain /\ { swt0 :: Unit }
-    , swt0 :: TGain /\ { osc0 :: Unit }
+    , swt0 :: TGain /\ { bpf0 :: Unit, bpf1 :: Unit, bpf2 :: Unit }
+    , bpf0 :: TBandpass /\ { osc0 :: Unit }
+    , bpf1 :: TBandpass /\ { osc0 :: Unit }
+    , bpf2 :: TBandpass /\ { osc0 :: Unit }
     , osc0 :: TSawtoothOsc /\ {}
     }
 
 type FrameTp p i o a
   = Frame (SceneI Unit Unit) FFIAudio (Effect Unit) p i o a
 
-deltaIter :: List (Number /\ Number)
-deltaIter = (1.0 /\ 0.0) : (1.08 /\ 1.0) : (1.17 /\ 0.3) : (1.63 /\ 0.1) : (1.83 /\ 0.0) : Nil
+deltaGain :: List (Number /\ Number)
+deltaGain = (1.0 /\ 0.0) : (2.0 /\ 1.0) : (3.0 /\ 0.0) : Nil
 
-changeIter :: forall proof. Boolean -> List (Number /\ Number) -> FrameTp proof SceneType SceneType Unit
-changeIter _ Nil = proof `WAGS.bind` flip withProof unit
+deltaQ :: List (Number /\ Number)
+deltaQ = (1.0 /\ myQ) : (2.0 /\ myQ) : (3.0 /\ myQ) : Nil
 
-changeIter forceSet (a : b) = WAGS.do
-  doChanges forceSet a
-  changeIter false b
+deltaBPF0Freq :: List (Number /\ Number)
+deltaBPF0Freq = (1.0 /\ fund * 3.0) : (3.0 /\ fund * 1.0) : Nil
 
-doChanges :: forall proof. Boolean ->  Number /\ Number -> FrameTp proof SceneType SceneType Unit
-doChanges forceSet (a /\ b)  = WAGS.do
+deltaBPF1Freq :: List (Number /\ Number)
+deltaBPF1Freq = (1.0 /\ fund * 4.0) : (2.0 /\ fund * 6.0) : (3.0 /\ fund * 4.0) : Nil
+
+deltaBPF2Freq :: List (Number /\ Number)
+deltaBPF2Freq = (1.0 /\ fund * 8.0) : (1.5 /\ fund * 9.0) : (2.0 /\ fund * 8.0) : (2.5 /\ fund * 10.0) : (3.0 /\ fund * 8.0) : Nil
+
+changeIter :: forall proof. (Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit) -> Boolean -> List (Number /\ Number) -> FrameTp proof SceneType SceneType Unit
+changeIter _ _ Nil = proof `WAGS.bind` flip withProof unit
+
+changeIter dc forceSet (a : b) = WAGS.do
+  dc forceSet a
+  changeIter dc false b
+
+changeGain :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeGain forceSet (a /\ b) = WAGS.do
   change { swt0: gain_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
+
+myQ = 100.0 :: Number
+
+cbpf :: Number -> Number -> Boolean -> Bandpass GetSetAP GetSetAP
+cbpf a b forceSet =
+  bandpass_
+    { freq: AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }
+    , q: myQ
+    }
+
+changeBPF0Freq :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeBPF0Freq forceSet (a /\ b) = WAGS.do
+  change { bpf0: cbpf a b forceSet } $> unit
+
+changeBPF1Freq :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeBPF1Freq forceSet (a /\ b) = WAGS.do
+  change { bpf1: cbpf a b forceSet } $> unit
+
+changeBPF2Freq :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeBPF2Freq forceSet (a /\ b) = WAGS.do
+  change { bpf2: cbpf a b forceSet } $> unit
+
+fund = 220.0 :: Number
 
 createFrame :: FrameTp Frame0 {} SceneType Unit
 createFrame =
@@ -64,9 +101,15 @@ createFrame =
     :*> change
         { mix: gain_ 0.2
         , swt0: gain_ 0.0
-        , osc0: sawtoothOsc_ 440.0
+        , osc0: sawtoothOsc_ fund
+        , bpf0: bandpass_ { freq: fund * 3.0, q: myQ }
+        , bpf1: bandpass_ { freq: fund * 4.0, q: myQ }
+        , bpf2: bandpass_ { freq: fund * 8.0, q: myQ }
         }
-    :*> changeIter true deltaIter
+    :*> changeIter changeGain true deltaGain
+    :*> changeIter changeBPF0Freq true deltaBPF0Freq
+    :*> changeIter changeBPF1Freq true deltaBPF1Freq
+    :*> changeIter changeBPF2Freq true deltaBPF2Freq
 
 piece :: Scene (SceneI Unit Unit) FFIAudio (Effect Unit) Frame0
 piece =
