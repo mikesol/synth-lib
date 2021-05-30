@@ -1,4 +1,4 @@
-module EPWF (makePiecewise, ASDR, TimeHeadroom) where
+module EPWF (makePiecewise, calcSlope, ASDR, TimeHeadroom) where
 
 import Prelude
 import Control.Comonad.Cofree (Cofree, (:<))

@@ -1,6 +1,7 @@
 module Main where
 
 import Prelude
+
 import Control.Apply.Indexed ((:*>))
 import Control.Comonad.Cofree (Cofree, mkCofree)
 import Data.Foldable (for_)
@@ -8,6 +9,7 @@ import Data.List (List(..), (:))
 import Data.Maybe (Maybe(..))
 import Data.Nullable (toNullable)
 import Data.Tuple.Nested ((/\), type (/\))
+import EPWF (calcSlope)
 import Effect (Effect)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
@@ -24,10 +26,10 @@ import WAGS.Control.Functions (proof, withProof)
 import WAGS.Control.Functions.Validated (loop, (@|>))
 import WAGS.Control.Qualified as WAGS
 import WAGS.Control.Types (Frame, Frame0, Scene)
-import WAGS.Graph.AudioUnit (Bandpass(..), TBandpass, TGain, TSawtoothOsc, TSpeaker)
-import WAGS.Graph.Optionals (GetSetAP, bandpass_, gain_, sawtoothOsc_)
-import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter, AudioParameter_(..))
-import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, getMicrophoneAndCamera, makeUnitCache)
+import WAGS.Graph.AudioUnit (Bandpass, TBandpass, TGain, THighpass(..), TSawtoothOsc, TSpeaker)
+import WAGS.Graph.Optionals (GetSetAP, bandpass_, gain_, highpass_, sawtoothOsc_)
+import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter_(..))
+import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, makeUnitCache)
 import WAGS.Patch (patch)
 import WAGS.Run (SceneI, run)
 
@@ -35,7 +37,8 @@ vol = 1.4 :: Number
 
 type SceneType
   = { speaker :: TSpeaker /\ { mix :: Unit }
-    , mix :: TGain /\ { swt0 :: Unit }
+    , mix :: TGain /\ { hpf0 :: Unit }
+    , hpf0 :: THighpass /\ { swt0 :: Unit }
     , swt0 :: TGain /\ { bpf0 :: Unit, bpf1 :: Unit, bpf2 :: Unit }
     , bpf0 :: TBandpass /\ { osc0 :: Unit }
     , bpf1 :: TBandpass /\ { osc0 :: Unit }
@@ -46,20 +49,23 @@ type SceneType
 type FrameTp p i o a
   = Frame (SceneI Unit Unit) FFIAudio (Effect Unit) p i o a
 
-deltaGain :: List (Number /\ Number)
-deltaGain = (1.0 /\ 0.0) : (2.0 /\ 1.0) : (3.0 /\ 0.0) : Nil
+gtime :: Number -> Number
+gtime n
+  | n < 0.0 = 1.0
+  | n <= 1.0 = calcSlope 0.0 1.0 1.0 9.0 n
+  | otherwise = 9.0
 
-deltaQ :: List (Number /\ Number)
-deltaQ = (1.0 /\ myQ) : (2.0 /\ myQ) : (3.0 /\ myQ) : Nil
+deltaGain :: List (Number /\ Number)
+deltaGain = (gtime 0.0 /\ 0.0) : (gtime 0.5 /\ 1.0) : (gtime 1.0 /\ 0.0) : Nil
 
 deltaBPF0Freq :: List (Number /\ Number)
-deltaBPF0Freq = (1.0 /\ fund * 3.0) : (3.0 /\ fund * 1.0) : Nil
+deltaBPF0Freq = (gtime 0.0 /\ fund * 3.0) : (gtime 0.25 /\ fund * 2.0) : (gtime 1.0 /\ fund * 1.0) : Nil
 
 deltaBPF1Freq :: List (Number /\ Number)
-deltaBPF1Freq = (1.0 /\ fund * 4.0) : (2.0 /\ fund * 6.0) : (3.0 /\ fund * 4.0) : Nil
+deltaBPF1Freq = (gtime 0.0 /\ fund * 4.0) : (gtime 0.75 /\ fund * 6.0) : (gtime 1.0 /\ fund * 4.0) : Nil
 
 deltaBPF2Freq :: List (Number /\ Number)
-deltaBPF2Freq = (1.0 /\ fund * 8.0) : (1.5 /\ fund * 9.0) : (2.0 /\ fund * 8.0) : (2.5 /\ fund * 10.0) : (3.0 /\ fund * 8.0) : Nil
+deltaBPF2Freq = (gtime 0.0 /\ fund * 8.0) : (gtime 0.25 /\ fund * 9.0) : (gtime 0.5 /\ fund * 8.0) : (gtime 0.75 /\ fund * 10.0) : (gtime 1.0 /\ fund * 8.0) : Nil
 
 changeIter :: forall proof. (Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit) -> Boolean -> List (Number /\ Number) -> FrameTp proof SceneType SceneType Unit
 changeIter _ _ Nil = proof `WAGS.bind` flip withProof unit
@@ -102,6 +108,7 @@ createFrame =
         { mix: gain_ 0.2
         , swt0: gain_ 0.0
         , osc0: sawtoothOsc_ fund
+        , hpf0: highpass_ { freq: 1200.0, q: 30.0 }
         , bpf0: bandpass_ { freq: fund * 3.0, q: myQ }
         , bpf1: bandpass_ { freq: fund * 4.0, q: myQ }
         , bpf2: bandpass_ { freq: fund * 8.0, q: myQ }
@@ -183,14 +190,11 @@ render _ =
 handleAction :: forall output m. MonadEffect m => MonadAff m => Action -> H.HalogenM State Action () output m Unit
 handleAction = case _ of
   StartAudio -> do
-    { microphone } <- H.liftAff $ getMicrophoneAndCamera true false
+    --{ microphone } <- H.liftAff $ getMicrophoneAndCamera true false
     audioCtx <- H.liftEffect context
     unitCache <- H.liftEffect makeUnitCache
     let
-      ffiAudio =
-        (defaultFFIAudio audioCtx unitCache)
-          { microphone = toNullable microphone
-          }
+      ffiAudio = (defaultFFIAudio audioCtx unitCache) -- { microphone = toNullable microphone }
     unsubscribe <-
       H.liftEffect
         $ subscribe
