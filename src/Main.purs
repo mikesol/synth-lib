@@ -74,6 +74,9 @@ deltaBPF1Freq = (gtime 0.0 /\ fund * 4.0) : (gtime 0.75 /\ fund * 6.0) : (gtime 
 deltaBPF2Freq :: List (Number /\ Number)
 deltaBPF2Freq = (gtime 0.0 /\ fund * 8.0) : (gtime 0.25 /\ fund * 9.0) : (gtime 0.5 /\ fund * 8.0) : (gtime 0.75 /\ fund * 10.0) : (gtime 1.0 /\ fund * 8.0) : Nil
 
+deltaOsc0Freq :: List (Number /\ Number) -- no change
+deltaOsc0Freq = (gtime 0.7 /\ fund) : (gtime 0.77 /\ fund * 0.98) : (gtime 0.86 /\ fund * 1.00) : (gtime 1.0 /\ fund * 1.00) : Nil
+
 changeIter :: forall proof. (Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit) -> Boolean -> List (Number /\ Number) -> FrameTp proof SceneType SceneType Unit
 changeIter _ _ Nil = proof `WAGS.bind` flip withProof unit
 
@@ -110,6 +113,10 @@ changeDel :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneTyp
 changeDel forceSet (a /\ b) = WAGS.do
   change { del0: delay_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
 
+changeOsc :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeOsc forceSet (a /\ b) = WAGS.do
+  change { osc0: sawtoothOsc_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
+
 fund :: Number
 fund = let md = 12.0 in 440.0 * (2.0 `pow` (md / 12.0))
 
@@ -131,6 +138,7 @@ createFrame =
     :*> changeIter changeBPF1Freq true deltaBPF1Freq
     :*> changeIter changeBPF2Freq true deltaBPF2Freq
     :*> changeIter changeDel true deltaDel
+    :*> changeIter changeOsc true deltaOsc0Freq
 
 piece :: Scene (SceneI Unit Unit) FFIAudio (Effect Unit) Frame0
 piece =
