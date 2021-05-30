@@ -1,13 +1,13 @@
-# Feedback example
+# Synth lib
 
-Loops in the browser!
+Evolving library of various pads and synths.
 
-[Listen here](https://mikesol.github.io/feedback/index.html)
+[Listen here](https://mikesol.github.io/synth-lib/index.html)
 
 ## Run locally
 
 ```bash
-git clone https://github.com/mikesol/feedback
+git clone https://github.com/mikesol/synth-lib
 cd feedback
 npm install
 npm start
