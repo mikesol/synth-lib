@@ -2,7 +2,7 @@
 
 Evolving library of various pads and synths.
 
-[Listen here](https://mikesol.github.io/synth-lib/index.html)
+[Listen here](https://mikesol.github.io/synth-lib/)
 
 ## Run locally
 
