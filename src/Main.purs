@@ -111,7 +111,7 @@ changeDel forceSet (a /\ b) = WAGS.do
   change { del0: delay_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
 
 fund :: Number
-fund = let md = -12.0 in 440.0 * (2.0 `pow` (md / 12.0))
+fund = let md = 12.0 in 440.0 * (2.0 `pow` (md / 12.0))
 
 createFrame :: FrameTp Frame0 {} SceneType Unit
 createFrame =
