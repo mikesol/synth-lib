@@ -1,7 +1,6 @@
 module Main where
 
 import Prelude
-
 import Control.Applicative.Indexed (ipure)
 import Control.Apply.Indexed ((:*>))
 import Control.Comonad.Cofree (Cofree, mkCofree)
@@ -10,10 +9,10 @@ import Data.Foldable (for_)
 import Data.List (List(..), (:))
 import Data.Maybe (Maybe(..))
 import Data.Tuple.Nested ((/\), type (/\))
-import EPWF (calcSlope)
 import Effect (Effect)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
+import Effect.Class.Console as Log
 import FRP.Event (subscribe)
 import Halogen (ClassName(..))
 import Halogen as H
@@ -27,12 +26,12 @@ import WAGS.Change (ichange)
 import WAGS.Control.Functions.Validated (freeze, (@!>))
 import WAGS.Control.Indexed (IxWAG)
 import WAGS.Control.Types (Frame0, Scene)
-import WAGS.Graph.AudioUnit (Bandpass, TBandpass, TDelay, TGain, TSawtoothOsc, TSpeaker)
-import WAGS.Graph.Optionals (GetSetAP, bandpass_, delay_, gain_, sawtoothOsc_)
-import WAGS.Graph.Parameter (AudioParameterTransition(..), AudioParameter_(..))
+import WAGS.Graph.AudioUnit (OnOff(..), TBandpass, TDelay, TGain, TSawtoothOsc, TSpeaker)
+import WAGS.Graph.Parameter (AudioParameter, ff)
 import WAGS.Interpret (AudioContext, FFIAudio(..), close, context, defaultFFIAudio, makeUnitCache)
+import WAGS.Math (calcSlope)
 import WAGS.Patch (ipatch)
-import WAGS.Run (SceneI, run)
+import WAGS.Run (RunAudio, SceneI, RunEngine, run)
 
 vol = 1.4 :: Number
 
@@ -49,9 +48,10 @@ type SceneType
     }
 
 type FrameTp p i o a
-  = IxWAG FFIAudio (Effect Unit) p Unit i o a
+  = IxWAG RunAudio RunEngine p Unit i o a
 
 stT = 0.1 :: Number
+
 endT = 8.1 :: Number
 
 gtime :: Number -> Number
@@ -78,45 +78,41 @@ deltaBPF2Freq = (gtime 0.0 /\ fund * 8.0) : (gtime 0.25 /\ fund * 9.0) : (gtime 
 deltaOsc0Freq :: List (Number /\ Number) -- no change
 deltaOsc0Freq = (gtime 0.7 /\ fund) : (gtime 0.77 /\ fund * 0.98) : (gtime 0.86 /\ fund * 1.00) : (gtime 1.0 /\ fund * 1.00) : Nil
 
-changeIter :: forall proof. (Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit) -> Boolean -> List (Number /\ Number) -> FrameTp proof SceneType SceneType Unit
-changeIter _ _ Nil = ipure unit
+changeIter :: forall proof. (Number /\ Number -> FrameTp proof SceneType SceneType Unit) -> List (Number /\ Number) -> FrameTp proof SceneType SceneType Unit
+changeIter _ Nil = ipure unit
 
-changeIter dc forceSet (a : b) = Ix.do
-  dc forceSet a
-  changeIter dc false b
+changeIter dc (a : b) = Ix.do
+  dc a
+  changeIter dc b
 
-changeGain :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
-changeGain forceSet (a /\ b) = WAGS.do
-  ichange { swt0: gain_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
+changeGain :: forall proof. Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeGain (a /\ b) = WAGS.do
+  ichange { swt0: ff a $ pure b } $> unit
 
 myQ = 100.0 :: Number
 
-cbpf :: Number -> Number -> Boolean -> Bandpass GetSetAP GetSetAP
-cbpf a b forceSet =
-  bandpass_
-    { freq: AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }
-    , q: myQ
-    }
+cbpf :: Number -> Number -> AudioParameter
+cbpf a b = ff a (pure b)
 
-changeBPF0Freq :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
-changeBPF0Freq forceSet (a /\ b) = WAGS.do
-  ichange { bpf0: cbpf a b forceSet } $> unit
+changeBPF0Freq :: forall proof. Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeBPF0Freq (a /\ b) = WAGS.do
+  ichange { bpf0: cbpf a b } $> unit
 
-changeBPF1Freq :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
-changeBPF1Freq forceSet (a /\ b) = WAGS.do
-  ichange { bpf1: cbpf a b forceSet } $> unit
+changeBPF1Freq :: forall proof. Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeBPF1Freq (a /\ b) = WAGS.do
+  ichange { bpf1: cbpf a b } $> unit
 
-changeBPF2Freq :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
-changeBPF2Freq forceSet (a /\ b) = WAGS.do
-  ichange { bpf2: cbpf a b forceSet } $> unit
+changeBPF2Freq :: forall proof. Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeBPF2Freq (a /\ b) = WAGS.do
+  ichange { bpf2: cbpf a b } $> unit
 
-changeDel :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
-changeDel forceSet (a /\ b) = WAGS.do
-  ichange { del0: delay_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
+changeDel :: forall proof. Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeDel (a /\ b) = WAGS.do
+  ichange { del0: ff a $ pure b } $> unit
 
-changeOsc :: forall proof. Boolean -> Number /\ Number -> FrameTp proof SceneType SceneType Unit
-changeOsc forceSet (a /\ b) = WAGS.do
-  ichange { osc0: sawtoothOsc_ (AudioParameter { param: Just b, timeOffset: a, transition: LinearRamp, forceSet }) } $> unit
+changeOsc :: forall proof. Number /\ Number -> FrameTp proof SceneType SceneType Unit
+changeOsc (a /\ b) = WAGS.do
+  ichange { osc0: ff a $ pure b } $> unit
 
 fund :: Number
 fund = let md = 12.0 in 440.0 * (2.0 `pow` (md / 12.0))
@@ -125,23 +121,23 @@ createFrame :: FrameTp Frame0 {} SceneType Unit
 createFrame =
   ipatch
     :*> ichange
-        { mix: gain_ 1.0
-        , swt0: gain_ 0.0
-        , att0: gain_ 0.5
-        , del0: delay_ 0.1
-        , osc0: sawtoothOsc_ fund
-        , bpf0: bandpass_ { freq: fund * 3.0, q: myQ }
-        , bpf1: bandpass_ { freq: fund * 4.0, q: myQ }
-        , bpf2: bandpass_ { freq: fund * 8.0, q: myQ }
+        { mix: 1.0
+        , swt0: 0.0
+        , att0: 0.5
+        , del0: 0.1
+        , osc0: { freq: fund, onOff: On }
+        , bpf0: { freq: fund * 3.0, q: myQ }
+        , bpf1: { freq: fund * 4.0, q: myQ }
+        , bpf2: { freq: fund * 8.0, q: myQ }
         }
-    :*> changeIter changeGain true deltaGain
-    :*> changeIter changeBPF0Freq true deltaBPF0Freq
-    :*> changeIter changeBPF1Freq true deltaBPF1Freq
-    :*> changeIter changeBPF2Freq true deltaBPF2Freq
-    :*> changeIter changeDel true deltaDel
-    :*> changeIter changeOsc true deltaOsc0Freq
+    :*> changeIter changeGain deltaGain
+    :*> changeIter changeBPF0Freq deltaBPF0Freq
+    :*> changeIter changeBPF1Freq deltaBPF1Freq
+    :*> changeIter changeBPF2Freq deltaBPF2Freq
+    :*> changeIter changeDel deltaDel
+    :*> changeIter changeOsc deltaOsc0Freq
 
-piece :: Scene (SceneI Unit Unit) FFIAudio (Effect Unit) Frame0 Unit
+piece :: Scene (SceneI Unit Unit) RunAudio RunEngine Frame0 Unit
 piece =
   (const createFrame)
     @!> freeze
